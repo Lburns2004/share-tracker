@@ -33,6 +33,10 @@ button:focus-visible{outline:2px solid #2a78d6;outline-offset:2px}
 <body>
 <h1>Share price tracker</h1>
 <p class="sub" id="upd">Loading…</p>
+<div class="row" id="metrics" role="group" aria-label="Metric">
+<button data-metric="price" aria-pressed="true">Share price</button>
+<button data-metric="mcap" aria-pressed="false">Market capitalisation</button>
+</div>
 <div class="row" id="ranges" role="group" aria-label="Time range"></div>
 <div class="row" id="modes" role="group" aria-label="Chart mode">
 <button data-m="idx" aria-pressed="true">Indexed (start = 100)</button>
@@ -68,7 +72,7 @@ const FB={
   mcap:{CIGI:4.9e9,J:16.3e9,WSPOF:18.3e9,VEOEF:25.6e9}
 };
 
-let D=null,range="1Y",mode="idx",chart=null,live=false;
+let D=null,range="1Y",mode="idx",metric="price",chart=null,live=false;
 
 function fallback(){
   const s={};
@@ -100,9 +104,15 @@ function datasets(){
   return CFG.companies.map(c=>{
     const w=windowed(D.series[c.ticker]||[]);
     const base=w.length?w[0][1]:1;
+    const latest= D.series[c.ticker]?.at(-1)?.[1];
+    const currentCap= D.mcap?.[c.ticker];
     return {label:c.name,borderColor:c.color,backgroundColor:c.color,borderWidth:2,borderDash:c.dash,tension:.15,
       pointRadius:w.length<40?3:0,pointHoverRadius:5,
-      data:w.map(p=>({x:ms(p[0]),y:mode==="idx"?Math.round(p[1]/base*1000)/10:p[1]}))};
+      data:w.map(p=>{
+        const estimatedCap=(currentCap && latest) ? currentCap*(p[1]/latest)/1e9 : null;
+        const y=metric==="mcap" ? estimatedCap : (mode==="idx"?Math.round(p[1]/base*1000)/10:p[1]);
+        return {x:ms(p[0]),y};
+      }).filter(p=>p.y!=null)};
   });
 }
 const marker={id:"marker",afterDatasetsDraw(ch){
@@ -122,12 +132,12 @@ function drawChart(){
   const opts={responsive:true,maintainAspectRatio:false,interaction:{mode:"nearest",axis:"x",intersect:false},
     plugins:{legend:{display:false},tooltip:{callbacks:{
       title:i=>fmtD(i[0].parsed.x),
-      label:c=>c.dataset.label+": "+(mode==="idx"?c.parsed.y.toFixed(1):"$"+c.parsed.y.toFixed(2))}}},
+      label:c=>c.dataset.label+": "+(metric==="mcap"?"$"+c.parsed.y.toFixed(2)+"bn":(mode==="idx"?c.parsed.y.toFixed(1):"$"+c.parsed.y.toFixed(2)))}}},
     scales:{
       x:{type:"linear",grid:{display:false},ticks:{color:mut,maxTicksLimit:6,maxRotation:0,font:{size:11},
         callback:v=>new Date(v).toLocaleDateString("en-GB",short?{day:"numeric",month:"short"}:{month:"short",year:"2-digit"})}},
-      y:{grid:{color:grid},title:{display:true,text:mode==="idx"?"Index (range start = 100)":"USD per share",color:mut,font:{size:11}},
-        ticks:{color:mut,font:{size:11},callback:v=>mode==="idx"?v:"$"+v}}}};
+      y:{grid:{color:grid},title:{display:true,text:metric==="mcap"?"Estimated market capitalisation (USD bn)":(mode==="idx"?"Index (range start = 100)":"USD per share"),color:mut,font:{size:11}},
+        ticks:{color:mut,font:{size:11},callback:v=>metric==="mcap"?"$"+v+"bn":(mode==="idx"?v:"$"+v)}}}};
   if(chart){chart.data.datasets=ds;chart.options=opts;chart.update();}
   else chart=new Chart(document.getElementById("ch"),{type:"line",data:{datasets:ds},options:opts,plugins:[marker]});
 }
@@ -148,9 +158,12 @@ function impact(){
 }
 function render(){
   document.getElementById("upd").textContent=live&&D.updated?"Updated "+new Date(D.updated).toLocaleString("en-GB"):"Showing built-in monthly data (no live feed yet)";
-  document.getElementById("note").textContent=live?"":"1M and 3M need live daily data from data.json to show detail.";
+  document.getElementById("note").textContent=metric==="mcap"?"Market capitalisation history is estimated by scaling today's market cap by historical share prices, assuming the share count has remained constant. It is not reported historical market-cap data.":(live?"":"1M and 3M need live daily data from data.json to show detail.");
+  document.getElementById("modes").style.display=metric==="mcap"?"none":"flex";
   drawChart();impact();
 }
+document.getElementById("metrics").onclick=e=>{const b=e.target.closest("button");if(!b)return;metric=b.dataset.metric;
+  document.querySelectorAll("#metrics button").forEach(x=>x.setAttribute("aria-pressed",x===b));render()};
 document.getElementById("ranges").innerHTML=Object.keys(RANGES).map(r=>`<button data-r="${r}" aria-pressed="${r===range}">${r}</button>`).join("");
 document.getElementById("leg").innerHTML=CFG.companies.map(c=>`<span><i style="background:${c.color}"></i>${c.name}</span>`).join("");
 document.getElementById("ranges").onclick=e=>{const b=e.target.closest("button");if(!b)return;range=b.dataset.r;
