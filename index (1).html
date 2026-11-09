@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Share price tracker</title>
+<style>
+:root{--bg:#fbfbfa;--fg:#161615;--mut:#6b6a64;--card:#f0efeb;--grid:#e2e1db;--bd:#cfcec6;--up:#0a7d3c;--dn:#c0392b}
+@media(prefers-color-scheme:dark){:root{--bg:#161615;--fg:#f0efec;--mut:#a5a49b;--card:#232322;--grid:#33332f;--bd:#46453f;--up:#4cc97f;--dn:#f0716a}}
+*{box-sizing:border-box}
+body{margin:0 auto;padding:18px 14px 40px;max-width:780px;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+h1{font-size:22px;font-weight:600;margin:0 0 2px}
+h2{font-size:17px;font-weight:600;margin:28px 0 10px}
+.sub{color:var(--mut);font-size:13px;margin:0 0 14px}
+.row{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 10px}
+button{font:inherit;font-size:13px;padding:6px 12px;border:1px solid var(--bd);background:transparent;color:var(--fg);border-radius:6px;cursor:pointer}
+button[aria-pressed=true]{background:var(--fg);color:var(--bg);border-color:var(--fg)}
+button:focus-visible{outline:2px solid #2a78d6;outline-offset:2px}
+.leg{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:12px;color:var(--mut);margin:0 0 8px}
+.leg i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px}
+.box{position:relative;height:320px}
+.note{font-size:12px;color:var(--mut);margin:8px 0 0}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}
+.card{background:var(--card);border-radius:10px;padding:14px}
+.card h3{font-size:15px;font-weight:600;margin:0}
+.card .co{font-size:12px;color:var(--mut);margin:0 0 8px}
+.big{font-size:26px;font-weight:600;font-variant-numeric:tabular-nums;margin:0}
+.line{display:flex;justify-content:space-between;font-size:13px;margin-top:4px;font-variant-numeric:tabular-nums}
+.line span:first-child{color:var(--mut)}
+.up{color:var(--up)}.dn{color:var(--dn)}
+</style>
+</head>
+<body>
+<h1>Share price tracker</h1>
+<p class="sub" id="upd">Loading…</p>
+<div class="row" id="ranges" role="group" aria-label="Time range"></div>
+<div class="row" id="modes" role="group" aria-label="Chart mode">
+<button data-m="idx" aria-pressed="true">Indexed (start = 100)</button>
+<button data-m="usd" aria-pressed="false">Price in USD</button>
+</div>
+<div class="leg" id="leg"></div>
+<div class="box"><canvas id="ch" role="img" aria-label="Share prices of Colliers, Jacobs, WSP and Veolia in US dollars"></canvas></div>
+<p class="note" id="note"></p>
+<h2>Impact since start date</h2>
+<div class="grid" id="impact"></div>
+<p class="note">Market cap change estimates today's market cap scaled by the price move, assuming the share count is unchanged. Prices are USD quotes (Colliers on Nasdaq; WSP and Veolia over-the-counter) and may be delayed about 15 minutes.</p>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<script>
+const CFG={
+  marker:"2026-09-01",
+  refreshMinutes:5,
+  companies:[
+    {name:"Colliers",ticker:"CIGI",color:"#2a78d6",dash:[],person:"Alex",since:"2025-09-01"},
+    {name:"Jacobs",ticker:"J",color:"#eb6834",dash:[6,3],person:"Dan",since:"2026-09-01"},
+    {name:"WSP",ticker:"WSPOF",color:"#1baf7a",dash:[2,3],person:"Louie",since:"2026-09-01"},
+    {name:"Veolia",ticker:"VEOEF",color:"#6250d6",dash:[8,3,2,3],person:"Samuel",since:"2026-09-01"}
+  ]
+};
+const RANGES={"1M":30,"3M":91,"6M":182,"1Y":365,"5Y":1826,"Max":null};
+
+const FB={
+  dates:["2025-08-29","2025-09-30","2025-10-31","2025-11-28","2025-12-31","2026-01-30","2026-02-27","2026-03-31","2026-04-30","2026-05-29","2026-06-30","2026-07-31","2026-08-31","2026-09-30","2026-10-30","2026-11-09"],
+  CIGI:[165.35,156.21,159.53,143.99,147.01,136.70,118.73,106.89,104.58,94.36,93.79,98.55,100.66,89.80,96.65,95.46],
+  J:[146.23,149.86,155.81,134.81,132.46,135.26,137.86,127.28,129.41,119.86,126.00,134.93,149.05,135.27,154.62,148.63],
+  WSPOF:[204.36,196.09,191.12,175.64,180.56,192.14,167.96,155.55,166.24,141.36,123.18,122.76,135.70,123.22,133.76,130.16],
+  VEOEF:[33.51,34.46,34.61,33.89,36.00,37.06,42.80,38.51,42.41,40.45,42.63,40.30,38.19,35.94,35.45,null],
+  mcap:{CIGI:4.9e9,J:16.3e9,WSPOF:18.3e9,VEOEF:25.6e9}
+};
+
+let D=null,range="1Y",mode="idx",chart=null,live=false;
+
+function fallback(){
+  const s={};
+  CFG.companies.forEach(c=>{s[c.ticker]=FB.dates.map((d,i)=>[d,FB[c.ticker][i]]).filter(p=>p[1]!=null)});
+  return {updated:null,series:s,mcap:FB.mcap};
+}
+async function load(){
+  try{
+    const r=await fetch("data.json?"+Date.now(),{cache:"no-store"});
+    if(!r.ok)throw 0;
+    D=await r.json();live=true;
+  }catch(e){D=fallback();live=false}
+  render();
+}
+const ms=d=>Date.parse(d);
+const fmtD=d=>new Date(d).toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"});
+function lastOnOrBefore(ser,date){
+  let p=ser[0];
+  for(const q of ser){if(ms(q[0])<=ms(date))p=q;else break}
+  return p;
+}
+function windowed(ser){
+  const days=RANGES[range];
+  if(days==null)return ser;
+  const end=ms(ser[ser.length-1][0]);
+  return ser.filter(p=>ms(p[0])>=end-days*864e5);
+}
+function datasets(){
+  return CFG.companies.map(c=>{
+    const w=windowed(D.series[c.ticker]||[]);
+    const base=w.length?w[0][1]:1;
+    return {label:c.name,borderColor:c.color,backgroundColor:c.color,borderWidth:2,borderDash:c.dash,tension:.15,
+      pointRadius:w.length<40?3:0,pointHoverRadius:5,
+      data:w.map(p=>({x:ms(p[0]),y:mode==="idx"?Math.round(p[1]/base*1000)/10:p[1]}))};
+  });
+}
+const marker={id:"marker",afterDatasetsDraw(ch){
+  const x=ch.scales.x,a=ch.chartArea,t=ms(CFG.marker);
+  if(t<x.min||t>x.max)return;
+  const px=x.getPixelForValue(t),c=ch.ctx;
+  c.save();c.strokeStyle=getComputedStyle(document.body).color;c.globalAlpha=.6;c.setLineDash([4,4]);
+  c.beginPath();c.moveTo(px,a.top);c.lineTo(px,a.bottom);c.stroke();c.setLineDash([]);
+  c.globalAlpha=1;c.font="12px system-ui,sans-serif";c.textAlign="right";c.fillStyle=c.strokeStyle;
+  c.fillText("1 Sep 26",px-4,a.top+12);c.restore();
+}};
+function drawChart(){
+  const ds=datasets();
+  const css=getComputedStyle(document.documentElement);
+  const mut=css.getPropertyValue("--mut"),grid=css.getPropertyValue("--grid");
+  const short=range==="1M"||range==="3M";
+  const opts={responsive:true,maintainAspectRatio:false,interaction:{mode:"nearest",axis:"x",intersect:false},
+    plugins:{legend:{display:false},tooltip:{callbacks:{
+      title:i=>fmtD(i[0].parsed.x),
+      label:c=>c.dataset.label+": "+(mode==="idx"?c.parsed.y.toFixed(1):"$"+c.parsed.y.toFixed(2))}}},
+    scales:{
+      x:{type:"linear",grid:{display:false},ticks:{color:mut,maxTicksLimit:6,maxRotation:0,font:{size:11},
+        callback:v=>new Date(v).toLocaleDateString("en-GB",short?{day:"numeric",month:"short"}:{month:"short",year:"2-digit"})}},
+      y:{grid:{color:grid},title:{display:true,text:mode==="idx"?"Index (range start = 100)":"USD per share",color:mut,font:{size:11}},
+        ticks:{color:mut,font:{size:11},callback:v=>mode==="idx"?v:"$"+v}}}};
+  if(chart){chart.data.datasets=ds;chart.options=opts;chart.update();}
+  else chart=new Chart(document.getElementById("ch"),{type:"line",data:{datasets:ds},options:opts,plugins:[marker]});
+}
+const money=v=>(v<0?"-":"+")+"$"+Math.abs(v/1e9).toFixed(2)+"bn";
+const pct=v=>(v>=0?"+":"")+v.toFixed(1)+"%";
+function impact(){
+  document.getElementById("impact").innerHTML=CFG.companies.map(c=>{
+    const ser=D.series[c.ticker]||[];
+    if(!ser.length)return "";
+    const a=lastOnOrBefore(ser,c.since),b=ser[ser.length-1];
+    const ch=b[1]/a[1]-1,capNow=D.mcap&&D.mcap[c.ticker],delta=capNow?capNow-capNow*a[1]/b[1]:null;
+    const cls=ch>=0?"up":"dn";
+    return `<div class="card"><h3>${c.person}’s Impact</h3><p class="co">${c.name} since ${fmtD(c.since)}</p>
+<p class="big ${cls}">${pct(ch*100)}</p>
+<div class="line"><span>Share price</span><span>$${a[1].toFixed(2)} → $${b[1].toFixed(2)}</span></div>
+<div class="line"><span>Market cap</span><span class="${cls}">${delta==null?"n/a":money(delta)}</span></div></div>`;
+  }).join("");
+}
+function render(){
+  document.getElementById("upd").textContent=live&&D.updated?"Updated "+new Date(D.updated).toLocaleString("en-GB"):"Showing built-in monthly data (no live feed yet)";
+  document.getElementById("note").textContent=live?"":"1M and 3M need live daily data from data.json to show detail.";
+  drawChart();impact();
+}
+document.getElementById("ranges").innerHTML=Object.keys(RANGES).map(r=>`<button data-r="${r}" aria-pressed="${r===range}">${r}</button>`).join("");
+document.getElementById("leg").innerHTML=CFG.companies.map(c=>`<span><i style="background:${c.color}"></i>${c.name}</span>`).join("");
+document.getElementById("ranges").onclick=e=>{const b=e.target.closest("button");if(!b)return;range=b.dataset.r;
+  document.querySelectorAll("#ranges button").forEach(x=>x.setAttribute("aria-pressed",x===b));render()};
+document.getElementById("modes").onclick=e=>{const b=e.target.closest("button");if(!b)return;mode=b.dataset.m;
+  document.querySelectorAll("#modes button").forEach(x=>x.setAttribute("aria-pressed",x===b));render()};
+load();
+setInterval(load,CFG.refreshMinutes*60000);
+</script>
+</body>
+</html>
