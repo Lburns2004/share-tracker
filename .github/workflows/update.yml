@@ -3,8 +3,18 @@ name: Update share prices
 
 on:
   schedule:
-    - cron: "*/10 14-21 * * 1-5"
+    # Every 10 minutes during US trading hours
+    - cron: "3,13,23,33,43,53 9-15 * * 1-5"
+      timezone: "America/New_York"
+
+    # Final update after US market closes
+    - cron: "3 16 * * 1-5"
+      timezone: "America/New_York"
+
+    # Daily backup
     - cron: "15 6 * * *"
+      timezone: "Europe/London"
+
   workflow_dispatch:
 
 permissions:
@@ -13,7 +23,7 @@ permissions:
 jobs:
   update:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
       - name: Checkout repository
@@ -29,6 +39,10 @@ jobs:
 
       - name: Update share prices
         run: python update_data.py
+
+      - name: Check generated data
+        run: |
+          python -c "import json; d=json.load(open('data.json')); assert all(d['series'].get(t) for t in ['CIGI','J','WSPOF','VEOEF']); print('Data validated:', d['updated'])"
 
       - name: Commit if changed
         run: |
