@@ -22,7 +22,7 @@ for ticker in TICKERS:
 
     close = stock.history(
         period="max",
-        interval="1d",
+        interval="15m",
         auto_adjust=False
     )["Close"].dropna()
 
